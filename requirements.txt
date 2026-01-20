@@ -4,5 +4,6 @@ scikit-learn
 opencv-python-headless
 Pillow
 streamlit-image-comparison
-mediapipe==0.10.9
+mediapipe
 protobuf==3.20.3
+matplotlib
