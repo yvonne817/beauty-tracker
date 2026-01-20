@@ -4,5 +4,3 @@ scikit-learn
 opencv-python-headless
 Pillow
 streamlit-image-comparison
-mediapipe
-protobuf<4.0.0
