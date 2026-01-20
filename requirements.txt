@@ -5,5 +5,4 @@ opencv-python-headless
 Pillow
 streamlit-image-comparison
 mediapipe
-protobuf==3.20.3
-matplotlib
+protobuf<4.0.0
