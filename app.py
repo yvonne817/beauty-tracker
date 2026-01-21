@@ -376,21 +376,31 @@ def quality_check(rgb_img) -> QualityResult:
 
 class SkinEngine:
     def _normalize_lighting(self, src_rgb, ref_rgb):
+        # 讓目前照與術前照的亮度分布更接近（只調 L，不動色相）
         src = cv2.cvtColor(src_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
         ref = cv2.cvtColor(ref_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+
         sL, sA, sB = cv2.split(src)
         rL, _, _ = cv2.split(ref)
 
         s_mean, s_std = cv2.meanStdDev(sL)
         r_mean, r_std = cv2.meanStdDev(rL)
-        s_std = float(max(1e-6, s_std))
-        r_std = float(max(1e-6, r_std))
 
-        L = (sL - float(s_mean)) * (r_std / s_std) + float(r_mean)
+        # meanStdDev 回傳的是 (1,1) array，要取出純數字
+        s_mean = float(s_mean[0][0])
+        s_std  = float(s_std[0][0])
+        r_mean = float(r_mean[0][0])
+        r_std  = float(r_std[0][0])
+
+        s_std = max(1e-6, s_std)
+        r_std = max(1e-6, r_std)
+
+        L = (sL - s_mean) * (r_std / s_std) + r_mean
         L = np.clip(L, 0, 255)
 
         merged = cv2.merge([L, sA, sB]).astype(np.uint8)
         return cv2.cvtColor(merged, cv2.COLOR_LAB2RGB)
+
 
     def align_faces(self, src_img_rgb, ref_img_rgb):
         """
