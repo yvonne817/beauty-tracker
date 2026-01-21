@@ -2,6 +2,7 @@ import os
 import time
 import uuid
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -117,6 +118,8 @@ def db_init_and_migrate():
             user_id TEXT NOT NULL,
             stage TEXT NOT NULL,
             record_date TEXT NOT NULL,
+            postop_date TEXT,
+            uploaded_at TEXT,
             img_path TEXT,
             q_score INTEGER,
             confidence INTEGER,
@@ -186,6 +189,8 @@ def db_init_and_migrate():
         "texture": "INTEGER",
         "img_path": "TEXT",
         "record_date": "TEXT",
+        "postop_date": "TEXT",
+        "uploaded_at": "TEXT",
     })
     ensure_columns(conn, "appointments", {
         "note": "TEXT",
@@ -286,6 +291,17 @@ def stage_order(stage: str) -> int:
     if stage in STAGES:
         return STAGES.index(stage)
     return 999
+
+
+
+def stage_to_days(stage: str):
+    """Extract N from '術後第 N 天'. Return None for non-fixed stages (e.g., '術後 30 天以上')."""
+    if not stage:
+        return None
+    m = re.search(r"第\s*(\d+)\s*天", stage)
+    if m:
+        return int(m.group(1))
+    return None
 
 
 def save_rgb_image(rgb_np, prefix="img") -> str:
@@ -519,21 +535,44 @@ def conf_label(conf: int) -> str:
 # =========================================================
 # 4) Records (upsert) + fetch
 # =========================================================
-def upsert_record(user_id: str, stage: str, record_date: str, img_path: str,
+def upsert_record(user_id: str, stage: str, op_date: str | None, img_path: str,
                   q_score: int, confidence: int, metrics: dict, note: str = ""):
+    """Upsert one record per (user_id, stage).
+    Stores BOTH:
+      - postop_date: computed from op_date + stage (if stage is fixed-day)
+      - uploaded_at: actual save timestamp (user may upload late)
+    For backward compatibility, record_date is set to postop_date if available, else today's date.
+    """
     conn = db_conn()
     cur = conn.cursor()
 
     rec_id = uuid.uuid4().hex
+    uploaded_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Compute postop_date from surgery date + day offset
+    postop_date = None
+    try:
+        if op_date:
+            d = stage_to_days(stage)
+            if d is not None:
+                base = datetime.strptime(op_date, "%Y-%m-%d").date()
+                postop_date = (base + timedelta(days=d)).isoformat()
+    except Exception:
+        postop_date = None
+
+    record_date = postop_date or str(date.today())
+
     cur.execute(
         """
         INSERT INTO records (
-            id, user_id, stage, record_date, img_path, q_score, confidence,
+            id, user_id, stage, record_date, postop_date, uploaded_at, img_path, q_score, confidence,
             wrinkle, spot, redness, pore, texture, note
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id, stage) DO UPDATE SET
             record_date=excluded.record_date,
+            postop_date=excluded.postop_date,
+            uploaded_at=excluded.uploaded_at,
             img_path=excluded.img_path,
             q_score=excluded.q_score,
             confidence=excluded.confidence,
@@ -545,7 +584,7 @@ def upsert_record(user_id: str, stage: str, record_date: str, img_path: str,
             note=excluded.note
         """,
         (
-            rec_id, user_id, stage, record_date, img_path, q_score, confidence,
+            rec_id, user_id, stage, record_date, postop_date, uploaded_at, img_path, q_score, confidence,
             int(metrics["wrinkle"]), int(metrics["spot"]), int(metrics["redness"]),
             int(metrics["pore"]), int(metrics["texture"]), note
         )
@@ -968,7 +1007,7 @@ def main_app():
                 upsert_record(
                     user_id=user["user_id"],
                     stage=stage,
-                    record_date=str(date.today()),
+                    op_date=user.get("op_date"),
                     img_path=preview_path,
                     q_score=int(q.score),
                     confidence=int(conf),
@@ -1040,9 +1079,10 @@ def main_app():
                 col1, col2 = st.columns([1.0, 1.2])
                 with col1:
                     if r.get("img_path") and os.path.exists(r["img_path"]):
-                        st.image(r["img_path"], caption=f"{r.get('stage','')}（{r.get('record_date','')}）", use_container_width=True)
+                        st.image(r["img_path"], caption=f"{r.get('stage','')}｜術後日 {r.get('postop_date') or r.get('record_date','')}｜上傳 {r.get('uploaded_at','') or '—'}", use_container_width=True)
                 with col2:
-                    st.markdown(f"**{r.get('stage','')}｜{r.get('record_date','')}**")
+                    st.markdown(f"**{r.get('stage','')}｜術後日 {r.get('postop_date') or r.get('record_date','')}**")
+                    st.caption(f"上傳時間：{r.get('uploaded_at', '') or '—'}")
                     st.caption(f"拍攝品質：{r.get('q_score',0)} / 可信度：{r.get('confidence',0)}")
                     if go is not None:
                         radar = plot_radar(m)
